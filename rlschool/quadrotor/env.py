@@ -63,8 +63,9 @@ Check https://github.com/PaddlePaddle/RLSchool/tree/master/rlschool/quadrotor#de
             '''
             raise RuntimeError(err_msg)
 
-        assert task in ['velocity_control', 'no_collision'], \
-            'Invalid task setting'
+        # TODO: other possible tasks: hovering_control, precision_landing
+        assert task in ['velocity_control', 'no_collision',
+                        'hovering_control'], 'Invalid task setting'
         if simulator_conf is None:
             simulator_conf = os.path.join(os.path.dirname(__file__),
                                           'quadrotorsim', 'config.xml')
@@ -116,7 +117,7 @@ Check https://github.com/PaddlePaddle/RLSchool/tree/master/rlschool/quadrotor#de
             self.velocity_targets = \
                 self.simulator.define_velocity_control_task(
                     dt, nt, seed)
-        elif self.task == 'no_collision':
+        elif self.task in ['no_collision', 'hovering_control']:
             self.map_matrix = Quadrotor.load_map(map_file)
 
             # Only for single quadrotor, also mark its start position
@@ -148,7 +149,7 @@ Check https://github.com/PaddlePaddle/RLSchool/tree/master/rlschool/quadrotor#de
         old_pos = [self.state['x'], self.state['y'], self.state['z']]
         self._update_state(sensor_dict, state_dict)
         new_pos = [self.state['x'], self.state['y'], self.state['z']]
-        if self.task == 'no_collision':
+        if self.task in ['no_collision', 'hovering_control']:
             is_collision = self._check_collision(old_pos, new_pos)
             reward = self._get_reward(collision=is_collision)
             reset = False
@@ -220,6 +221,26 @@ Check https://github.com/PaddlePaddle/RLSchool/tree/master/rlschool/quadrotor#de
             diff = self._get_velocity_diff(velocity_target)
             reward -= diff * 0.001
 
+        elif self.task == 'hovering_control':
+            velocity_square = 0
+            for k in self.global_velocity_keys:
+                velocity_square += self.state[k] ** 2
+
+            angular_velocity_square = 0
+            for k in self.angular_velocity_keys:
+                angular_velocity_square += self.state[k] ** 2
+
+            pose_penality = abs(self.state['pitch']) + \
+                abs(self.state['roll'])
+
+            reward += 10.0 - velocity_square ** 0.5 - \
+                angular_velocity_square ** 0.5 - pose_penality
+
+            if collision:
+                reward -= 10.0
+            else:
+                reward += 1.
+
         return reward
 
     def _check_collision(self, old_pos, new_pos):
@@ -289,13 +310,14 @@ if __name__ == '__main__':
         task = 'no_collision'
     else:
         task = sys.argv[1]
-    env = Quadrotor(task=task, nt=1000)
+    env = Quadrotor(task=task, nt=1000, obs_as_dict=True)
     env.reset()
     env.render()
     reset = False
     step = 1
     while not reset:
-        action = np.array([2., 2., 1., 1.], dtype=np.float32)
+        # action = np.array([2., 2., 1., 1.], dtype=np.float32)
+        action = np.array([5., 5., 5., 5.], dtype=np.float32)
         # action = np.array([1., 0., 0., 0.], dtype=np.float32)
         state, reward, reset = env.step(action)
         env.render()
