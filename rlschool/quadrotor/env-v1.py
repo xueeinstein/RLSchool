@@ -46,6 +46,7 @@ class Quadrotor(object):
         map_file (None|str): path to txt map config file, default
             map is a 100x100 flatten floor.
         simulator_conf (None|str): path to simulator config xml file.
+        obs_as_dict (bool): whether to return observation as dict.
     """
     def __init__(self,
                  dt=0.01,
@@ -54,6 +55,7 @@ class Quadrotor(object):
                  task='no_collision',
                  map_file=None,
                  simulator_conf=None,
+                 obs_as_dict=False,
                  healthy_reward=1.0,
                  reward_func_hypers=[],
                  **kwargs):
@@ -79,6 +81,7 @@ Check https://github.com/PaddlePaddle/RLSchool/tree/master/rlschool/quadrotor#de
         self.nt = nt
         self.ct = 0
         self.task = task
+        self.obs_as_dict = obs_as_dict
         self.healthy_reward = healthy_reward
         self.reward_func_hypers = reward_func_hypers
         # self.simulator = quadrotorsim.Simulator()
@@ -94,17 +97,19 @@ Check https://github.com/PaddlePaddle/RLSchool/tree/master/rlschool/quadrotor#de
         self.action_space.sample = Quadrotor.random_action(
             cfg_dict['action_space_low'], cfg_dict['action_space_high'], 4)
 
-        self.body_velocity_keys = ['b_v_x', 'b_v_y', 'b_v_z']
+        self.position_keys = ['x', 'y', 'z']
+        # self.position_keys = ['z']
+        self.global_velocity_keys = ['g_v_x', 'g_v_y', 'g_v_z']
+        self.flight_pose_keys = ['pitch', 'roll', 'yaw']
         self.accelerator_keys = ['acc_x', 'acc_y', 'acc_z']
         self.gyroscope_keys = ['gyro_x', 'gyro_y', 'gyro_z']
-        self.flight_pose_keys = ['pitch', 'roll', 'yaw']
-        self.barometer_keys = ['z']
+        self.extra_info_keys = ['power']
         self.task_velocity_control_keys = \
             ['next_target_g_v_x', 'next_target_g_v_y', 'next_target_g_v_z']
 
-        obs_dim = len(self.body_velocity_keys) + len(self.accelerator_keys) + \
-            len(self.gyroscope_keys) + len(self.flight_pose_keys) + \
-            len(self.barometer_keys)
+        obs_dim = len(self.position_keys) + len(self.global_velocity_keys) + \
+            len(self.flight_pose_keys) + len(self.accelerator_keys) + \
+            len(self.gyroscope_keys) + len(self.extra_info_keys)
         if self.task == 'velocity_control':
             obs_dim += len(self.task_velocity_control_keys)
         self.observation_space = namedtuple('observation_space', ['shape'])
@@ -113,7 +118,7 @@ Check https://github.com/PaddlePaddle/RLSchool/tree/master/rlschool/quadrotor#de
         self.state = {}
         self.viewer = None
         self.x_offset = self.y_offset = self.z_offset = 0
-        self.pos_0 = np.array([0.0] * 3).astype(np.float32)
+        self.x_0 = self.y_0 = self.z_0 = 0
 
         if self.task == 'velocity_control':
             self.velocity_targets = \
@@ -137,9 +142,16 @@ Check https://github.com/PaddlePaddle/RLSchool/tree/master/rlschool/quadrotor#de
         self._update_state(sensor_dict, state_dict)
 
         # Mark the initial position
-        self.pos_0 = np.copy(self.simulator.global_position)
+        self.x_0 = self.state['x']
+        self.y_0 = self.state['y']
+        self.z_0 = self.state['z']
 
-        return self._convert_state_to_ndarray()
+        if self.obs_as_dict:
+            state = {k: self.state[k] for k in self.state.keys()}
+            state['z'] += self.z_offset
+            return state
+        else:
+            return self._convert_state_to_ndarray()
 
     def step(self, action):
         self.ct += 1
@@ -148,13 +160,13 @@ Check https://github.com/PaddlePaddle/RLSchool/tree/master/rlschool/quadrotor#de
         sensor_dict = self.simulator.get_sensor()
         state_dict = self.simulator.get_state()
 
-        old_pos = [self.simulator.global_position[0] + self.x_offset,
-                   self.simulator.global_position[1] + self.y_offset,
-                   self.simulator.global_position[2] + self.z_offset]
+        old_pos = [self.state['x'] + self.x_offset,
+                   self.state['y'] + self.y_offset,
+                   self.state['z'] + self.z_offset]
         self._update_state(sensor_dict, state_dict)
-        new_pos = [self.simulator.global_position[0] + self.x_offset,
-                   self.simulator.global_position[1] + self.y_offset,
-                   self.simulator.global_position[2] + self.z_offset]
+        new_pos = [self.state['x'] + self.x_offset,
+                   self.state['y'] + self.y_offset,
+                   self.state['z'] + self.z_offset]
         if self.task in ['no_collision', 'hovering_control']:
             is_collision = self._check_collision(old_pos, new_pos)
             reward = self._get_reward(collision=is_collision)
@@ -171,9 +183,12 @@ Check https://github.com/PaddlePaddle/RLSchool/tree/master/rlschool/quadrotor#de
             reset = True
             self.ct = 0
 
-        info = {k: self.state[k] for k in self.state.keys()}
-        info['z'] += self.z_offset
-        return self._convert_state_to_ndarray(), reward, reset, info
+        if self.obs_as_dict:
+            state = {k: self.state[k] for k in self.state.keys()}
+            state['z'] += self.z_offset
+            return state, reward, reset
+        else:
+            return self._convert_state_to_ndarray(), reward, reset
 
     def render(self):
         if self.viewer is None:
@@ -184,25 +199,24 @@ Check https://github.com/PaddlePaddle/RLSchool/tree/master/rlschool/quadrotor#de
                                        y_offset=self.y_offset,
                                        z_offset=self.z_offset)
 
-        if 'z' not in self.state:
+        if 'x' not in self.state:
             # It's null state
             raise Exception('You are trying to render before calling reset()')
 
-        state = self._get_state_for_viewer()
         if self.task == 'velocity_control':
             self.viewer.view(
-                state, self.dt,
+                self.state, self.dt,
                 expected_velocity=self.velocity_targets[self.ct-1])
         else:
-            self.viewer.view(state, self.dt)
+            self.viewer.view(self.state, self.dt)
 
     def close(self):
         del self.simulator
 
     def _convert_state_to_ndarray(self):
-        keys_order = self.body_velocity_keys + self.accelerator_keys + \
-            self.gyroscope_keys + self.flight_pose_keys + \
-            self.barometer_keys
+        keys_order = self.position_keys + self.global_velocity_keys + \
+            self.flight_pose_keys + self.accelerator_keys + \
+            self.gyroscope_keys + self.extra_info_keys
 
         if self.task == 'velocity_control':
             keys_order.extend(self.task_velocity_control_keys)
@@ -223,7 +237,7 @@ Check https://github.com/PaddlePaddle/RLSchool/tree/master/rlschool/quadrotor#de
         """
         # Make sure energy cost always smaller than healthy reward,
         # to encourage longer running
-        reward = - min(self.dt * self.simulator.power, self.healthy_reward)
+        reward = - min(self.dt * self.state['power'], self.healthy_reward)
         if self.task == 'no_collision':
             task_reward = 0.0 if collision else self.healthy_reward
             reward += task_reward
@@ -239,10 +253,14 @@ Check https://github.com/PaddlePaddle/RLSchool/tree/master/rlschool/quadrotor#de
                 reward_type = self.reward_func_hypers[0]
 
             if reward_type == 'R1':
-                velocity_norm = np.linalg.norm(
-                    self.simulator.global_velocity)
-                angular_velocity_norm = np.linalg.norm(
-                    self.simulator.body_angular_velocity)
+                velocity_square = 0
+                for k in self.global_velocity_keys:
+                    velocity_square += self.state[k] ** 2
+
+                angular_velocity_square = 0
+                for k in self.gyroscope_keys:
+                    angular_velocity_square += self.state[k] ** 2
+
                 pose_penalty = abs(self.state['pitch']) + \
                     abs(self.state['roll'])
 
@@ -250,12 +268,14 @@ Check https://github.com/PaddlePaddle/RLSchool/tree/master/rlschool/quadrotor#de
                 if len(self.reward_func_hypers) == 4:
                     _, alpha, beta, gamma = self.reward_func_hypers
 
-                task_reward += - alpha * velocity_norm - \
-                    beta * angular_velocity_norm - \
+                task_reward += - alpha * velocity_square ** 0.5 - \
+                    beta * angular_velocity_square ** 0.5 - \
                     gamma * pose_penalty
             elif reward_type == 'R2':
-                move = np.linalg.norm(
-                    self.simulator.global_position - self.pos_0)
+                move = np.array([self.state['x'] - self.x_0,
+                                 self.state['y'] - self.y_0,
+                                 self.state['z'] - self.z_0])
+                move = np.linalg.norm(move)
 
                 hovering_range, in_range_r, out_range_r = 0.5, 10, -20
                 if len(self.reward_func_hypers) == 4:
@@ -267,8 +287,10 @@ Check https://github.com/PaddlePaddle/RLSchool/tree/master/rlschool/quadrotor#de
                 else:
                     task_reward += out_range_r
             elif reward_type == 'R3':
-                move = np.linalg.norm(
-                    self.simulator.global_position - self.pos_0)
+                move = np.array([self.state['x'] - self.x_0,
+                                 self.state['y'] - self.y_0,
+                                 self.state['z'] - self.z_0])
+                move = np.linalg.norm(move)
 
                 hovering_range, in_range_r, out_range_r = 0.5, 10, -20
                 if len(self.reward_func_hypers) == 4:
@@ -281,8 +303,10 @@ Check https://github.com/PaddlePaddle/RLSchool/tree/master/rlschool/quadrotor#de
                     task_reward += max(out_range_r, hovering_range - move)
 
             elif reward_type == 'R4':
-                move = np.linalg.norm(
-                    self.simulator.global_position - self.pos_0)
+                move = np.array([self.state['x'] - self.x_0,
+                                 self.state['y'] - self.y_0,
+                                 self.state['z'] - self.z_0])
+                move = np.linalg.norm(move)
 
                 hovering_range, in_range_r, out_range_r = 0.5, 10, -20
                 if len(self.reward_func_hypers) == 4:
@@ -297,85 +321,6 @@ Check https://github.com/PaddlePaddle/RLSchool/tree/master/rlschool/quadrotor#de
                 pose_penalty = abs(self.state['pitch']) + \
                     abs(self.state['roll'])
                 task_reward += -0.1 * pose_penalty
-
-            elif reward_type == 'R5':
-                velocity_norm = np.linalg.norm(
-                    self.simulator.global_velocity)
-
-                z_move = abs(self.pos_0[2] - self.state['z'])
-
-                alpha = 1.0
-                hovering_range, in_range_r, out_range_r = 0.5, 10, -20
-                if len(self.reward_func_hypers) == 5:
-                    _, alpha, hovering_range, in_range_r, out_range_r = \
-                        self.reward_func_hypers
-
-                task_reward -= alpha * velocity_norm
-                if z_move < hovering_range:
-                    task_reward += in_range_r
-                else:
-                    task_reward += max(out_range_r, hovering_range - z_move)
-
-            elif reward_type == 'R6':
-                velocity_norm = np.linalg.norm(
-                    self.simulator.global_velocity)
-                pose_penalty = abs(self.state['pitch']) + \
-                    abs(self.state['roll'])
-
-                alpha, beta = 1.0, 1.0
-                hovering_range, in_range_r, out_range_r = 0.5, 10, -20
-                if len(self.reward_func_hypers) == 6:
-                    _, alpha, beta, hovering_range, in_range_r, \
-                        out_range_r = self.reward_func_hypers
-
-                task_reward -= alpha * velocity_norm + beta * pose_penalty
-
-                z_move = abs(self.pos_0[2] - self.state['z'])
-                if z_move < hovering_range:
-                    task_reward += in_range_r
-                else:
-                    task_reward += max(out_range_r, hovering_range - z_move)
-            elif reward_type == 'R7':
-                xy_move = np.linalg.norm(
-                    self.simulator.global_position[:2] - self.pos_0[:2])
-                z_move = abs(self.pos_0[2] - self.state['z'])
-
-                hovering_range, in_range_r, out_range_r = 0.5, 10, -20
-                if len(self.reward_func_hypers) == 4:
-                    _, hovering_range, in_range_r, out_range_r = \
-                        self.reward_func_hypers
-
-                if z_move < hovering_range:
-                    task_reward += in_range_r
-                else:
-                    task_reward += max(out_range_r, hovering_range - z_move)
-
-                if xy_move < hovering_range:
-                    task_reward += in_range_r
-                else:
-                    task_reward += max(out_range_r,
-                                       hovering_range - xy_move)
-
-            elif reward_type == 'R8':
-                velocity_norm = np.linalg.norm(
-                    self.simulator.global_velocity)
-                angular_velocity_norm = np.linalg.norm(
-                    self.simulator.body_angular_velocity)
-
-                alpha, beta = 1.0, 1.0
-                hovering_range, in_range_r, out_range_r = 0.5, 10, -20
-                if len(self.reward_func_hypers) == 6:
-                    _, alpha, beta, hovering_range, in_range_r, \
-                        out_range_r = self.reward_func_hypers
-
-                task_reward -= alpha * velocity_norm + \
-                    beta * angular_velocity_norm
-
-                z_move = abs(self.pos_0[2] - self.state['z'])
-                if z_move < hovering_range:
-                    task_reward += in_range_r
-                else:
-                    task_reward += max(out_range_r, hovering_range - z_move)
 
             reward += task_reward
 
@@ -411,20 +356,10 @@ Check https://github.com/PaddlePaddle/RLSchool/tree/master/rlschool/quadrotor#de
 
     def _get_velocity_diff(self, velocity_target):
         vt_x, vt_y, vt_z = velocity_target
-        diff = abs(vt_x - self.state['b_v_x']) + \
-            abs(vt_y - self.state['b_v_y']) + \
-            abs(vt_z - self.state['b_v_z'])
+        diff = abs(vt_x - self.state['g_v_x']) + \
+            abs(vt_y - self.state['g_v_y']) + \
+            abs(vt_z - self.state['g_v_z'])
         return diff
-
-    def _get_state_for_viewer(self):
-        state = {k: v for k, v in self.state.items()}
-        state['x'] = self.simulator.global_position[0]
-        state['y'] = self.simulator.global_position[1]
-        state['z'] = self.simulator.global_position[2]
-        state['g_v_x'] = self.simulator.global_velocity[0]
-        state['g_v_y'] = self.simulator.global_velocity[1]
-        state['g_v_z'] = self.simulator.global_velocity[2]
-        return state
 
     @staticmethod
     def load_map(map_file):
@@ -455,7 +390,7 @@ if __name__ == '__main__':
         task = 'no_collision'
     else:
         task = sys.argv[1]
-    env = Quadrotor(task=task, nt=1000)
+    env = Quadrotor(task=task, nt=1000, obs_as_dict=True)
     env.reset()
     env.render()
     reset = False
@@ -466,12 +401,11 @@ if __name__ == '__main__':
         # action = np.array([2., 2., 1., 1.], dtype=np.float32)
         action = np.array([5., 5., 5., 5.], dtype=np.float32)
         # action = np.array([1., 0., 0., 0.], dtype=np.float32)
-        state, reward, reset, info = env.step(action)
+        state, reward, reset = env.step(action)
         total_reward += reward
         env.render()
         print('---------- step %s ----------' % step)
         print('state:', state)
-        print('info:', info)
         print('reward:', reward)
         step += 1
     env.close()

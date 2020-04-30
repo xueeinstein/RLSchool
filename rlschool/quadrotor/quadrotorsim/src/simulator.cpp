@@ -337,7 +337,13 @@ int Simulator::run_internal(ActionU &act) {
         me[i] = _thrust_coeff_phi / _thrust_coeff_ra *
                 (eff_act -
                  _thrust_coeff_phi * _state.propeller_angular_velocity(i));
-        propeller_powers[i] = me[i] / _thrust_coeff_phi * eff_act;
+        if (me[i] < 0)
+            propeller_powers[i] = -me[i] / _thrust_coeff_phi * eff_act;
+        else
+            propeller_powers[i] = me[i] / _thrust_coeff_phi * eff_act;
+        // std::cout << "phi: " << _thrust_coeff_phi << ", " << "ra: " << _thrust_coeff_ra << std::endl;
+        // std::cout << "w_" << i << ": " << _state.propeller_angular_velocity(i) << std::endl;
+        // std::cout << "me_" << i << ": " << me[i] << std::endl;
         double d_propeller_angular_velocity =
             1.0 / _thrust_coeff_jm * (me[i] - _thrust_coeff_mm);
 
@@ -367,6 +373,8 @@ int Simulator::run_internal(ActionU &act) {
             -Eigen::Vector3f(0.0, 0.0, thrust).cross(_propeller_coord.row(i));
     }
     prop_torque(2) += -me[0] + me[1] - me[2] + me[3];
+    // std::cout << "prop_force: [" << prop_force(0) << ", " << prop_force(1) << ", " << prop_force(2) << "]" << std::endl;
+    // std::cout << "prop_torque: [" << prop_torque(0) << ", " << prop_torque(1) << ", " << prop_torque(2) << "]" << std::endl;
 
     // drag force
     Eigen::Vector3f f_drag = -_state.global_velocity.norm() *
@@ -386,6 +394,8 @@ int Simulator::run_internal(ActionU &act) {
     // calculate summation forces and torques
     Eigen::Vector3f f_all = prop_force + f_grav + f_drag;
     Eigen::Vector3f t_all = prop_torque + t_grav + t_drag;
+    // std::cout << "f_all: [" << f_all(0) << ", " << f_all(1) << ", " << f_all(2) << "]" << std::endl;
+    // std::cout << "t_all: [" << t_all(0) << ", " << t_all(1) << ", " << t_all(2) << "]" << std::endl;
 
     // update the state
     _body_acceleration = f_all / _quality;
