@@ -294,10 +294,20 @@ class Map(object):
         transform[1, 1] = 2.5
         transform[2, 2] = 2.5
 
+        # NOTE: because `rotation_transform_mat' is clockwise,
+        # and pitch, roll, yaw are counterclockwise,
+        # we use -yaw, -pitch and -roll
         yaw, pitch, roll = rotation
-        transform = np.dot(transform, rotation_transform_mat(yaw, 'yaw'))
-        transform = np.dot(transform, rotation_transform_mat(pitch, 'pitch'))
-        transform = np.dot(transform, rotation_transform_mat(roll, 'roll'))
+        transform = np.dot(transform, rotation_transform_mat(-yaw, 'yaw'))
+        transform = np.dot(transform, rotation_transform_mat(-pitch, 'pitch'))
+        transform = np.dot(transform, rotation_transform_mat(-roll, 'roll'))
+        # Match drone model space x-y-z to openGL x-z-y
+        # TODO: read the config.json and match the propeller positions
+        model_space_transform = rotation_transform_mat(np.pi / 2, 'roll')
+        reverse_z = np.eye(4)
+        reverse_z[2, 2] = -1.0
+        model_space_transform = np.dot(model_space_transform, reverse_z)
+        transform = np.dot(transform, model_space_transform)
 
         # Add a new matrix to the model stack to transform the model
         gl.glPushMatrix()
