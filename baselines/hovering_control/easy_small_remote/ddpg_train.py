@@ -25,7 +25,8 @@ from parl.utils import logger, tensorboard, action_mapping, ReplayMemory
 from quadrotor_agent import QuadrotorAgent
 from quadrotor_model import QuadrotorModel
 
-PARL_CLUSTER = '10.90.243.36:8003'
+# PARL_CLUSTER = '10.90.243.36:8003'
+PARL_CLUSTER = '10.12.121.6:8089'
 
 
 def load_hparams(hparams_file):
